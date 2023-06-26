@@ -1,1 +1,1 @@
-# canny-edge
+# Canny edge detector
