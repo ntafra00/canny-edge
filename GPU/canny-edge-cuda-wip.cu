@@ -259,8 +259,14 @@ void cannyEdgeDetection(uint8_t *inputImage, double lowerThreshold, double highe
 {
     int *pixels = imgToArray(inputImage, height, width, channels);
     int *pixelsPtr;
+    int *blurredPixelsPtr;
+    int *grayscalePixelsPtr;
+    int *cannyPixelsPtr;
 
     cudaMalloc((void **)&pixelsPtr, height * width * channels * sizeof(int));
+    cudaMalloc((void **)&blurredPixelsPtr, height * width * channels * sizeof(int));
+    cudaMalloc((void **)&grayscalePixelsPtr, height * width * channels * sizeof(int));
+    cudaMalloc((void **)&cannyPixelsPtr, height * width * channels * sizeof(int));
 
     cudaMemcpy(pixelsPtr, pixels, height * width * channels * sizeof(int), cudaMemcpyHostToDevice);
 
@@ -269,12 +275,10 @@ void cannyEdgeDetection(uint8_t *inputImage, double lowerThreshold, double highe
                    (height + blockSize.y - 1) / blockSize.y,
                    (channels + blockSize.z - 1) / blockSize.z);
 
-    // GAUSSIAN_BLUR:
-
-    gaussianBlur<<<numBlocks, blockSize>>>(pixelsPtr, pixelsPtr, height, width, channels);
+    gaussianBlur<<<numBlocks, blockSize>>>(pixelsPtr, blurredPixelsPtr, height, width, channels);
     std::cout << "Exited gaussian" << std::endl;
 
-    rgbToGrayscale<<<numBlocks, blockSize>>>(pixelsPtr, pixelsPtr, height, width, channels);
+    rgbToGrayscale<<<numBlocks, blockSize>>>(blurredPixelsPtr, grayscalePixelsPtr, height, width, channels);
     std::cout << "Exited grayscale" << std::endl;
 
     double *gradientPtr;
@@ -283,10 +287,11 @@ void cannyEdgeDetection(uint8_t *inputImage, double lowerThreshold, double highe
     cudaMalloc((void **)&gradientPtr, height * width * sizeof(double));
     cudaMalloc((void **)&thetaPtr, height * width * sizeof(int));
 
-    cannyFilter<<<numBlocks, blockSize>>>(pixelsPtr, pixelsPtr, height, width, gradientPtr, thetaPtr);
+    cannyFilter<<<numBlocks, blockSize>>>(grayscalePixelsPtr, cannyPixelsPtr, height, width, gradientPtr, thetaPtr);
     std::cout << "Exited cannyFilter" << std::endl;
 
-    cudaMemcpy(pixels, pixelsPtr, height * width * channels * sizeof(int), cudaMemcpyDeviceToHost);
+    int *outputPixels = (int *)malloc(width * height * sizeof(int));
+    cudaMemcpy(outputPixels, cannyPixelsPtr, height * width * sizeof(int), cudaMemcpyDeviceToHost);
 
     uint8_t *outputImage = (unsigned char *)malloc(width * height);
     arrayToImg(pixels, outputImage, height, width, 1);
@@ -297,6 +302,8 @@ void cannyEdgeDetection(uint8_t *inputImage, double lowerThreshold, double highe
     cudaFree(pixelsPtr);
     cudaFree(gradientPtr);
     cudaFree(thetaPtr);
+    cudaFree(grayscalePixelsPtr);
+    cudaFree(blurredPixelsPtr);
 }
 
 int main()
