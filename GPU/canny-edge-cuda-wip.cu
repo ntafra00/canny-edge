@@ -51,54 +51,6 @@ void arrayToImg(int *pixels, uint8_t *pixelPtr, int sizeRows, int sizeCols, int 
     return;
 }
 
-std::vector<int> gaussianBlur(std::vector<int> &pixels, std::vector<std::vector<double>> &kernel, double kernelConst, int sizeRows, int sizeCols, int sizeDepth)
-{
-    std::vector<int> pixelsBlur(sizeRows * sizeCols * sizeDepth);
-    for (int i = 0; i < sizeRows; i++)
-    {
-        for (int j = 0; j < sizeCols; j++)
-        {
-            for (int k = 0; k < sizeDepth; k++)
-            {
-                double sum = 0;
-                double sumKernel = 0;
-                for (int y = -2; y <= 2; y++)
-                {
-                    for (int x = -2; x <= 2; x++)
-                    {
-                        if ((i + x) >= 0 && (i + x) < sizeRows && (j + y) >= 0 && (j + y) < sizeCols)
-                        {
-                            double channel = (double)pixels[(i + x) * sizeCols * sizeDepth + (j + y) * sizeDepth + k];
-                            sum += channel * kernelConst * kernel[x + 2][y + 2];
-                            sumKernel += kernelConst * kernel[x + 2][y + 2];
-                        }
-                    }
-                }
-                pixelsBlur[i * sizeCols * sizeDepth + j * sizeDepth + k] = (int)(sum / sumKernel);
-            }
-        }
-    }
-    return pixelsBlur;
-}
-
-std::vector<int> rgbToGrayscale(std::vector<int> &pixels, int sizeRows, int sizeCols, int sizeDepth)
-{
-    std::vector<int> pixelsGray(sizeRows * sizeCols);
-    for (int i = 0; i < sizeRows; i++)
-    {
-        for (int j = 0; j < sizeCols; j++)
-        {
-            int sum = 0;
-            for (int k = 0; k < sizeDepth; k++)
-            {
-                sum = sum + pixels[i * sizeCols * sizeDepth + j * sizeDepth + k];
-            }
-            pixelsGray[i * sizeCols + j] = (int)(sum / sizeDepth);
-        }
-    }
-    return pixelsGray;
-}
-
 __global__ void gaussianBlur(int *inputPixels, int *blurredPixels, int sizeRows, int sizeCols, int sizeDepth)
 {
     double kernel[5][5] = {{2.0, 4.0, 5.0, 4.0, 2.0},
@@ -108,9 +60,9 @@ __global__ void gaussianBlur(int *inputPixels, int *blurredPixels, int sizeRows,
                            {2.0, 4.0, 5.0, 4.0, 2.0}};
     double kernelConst = (1.0 / 159.0);
 
-    int i = blockIdx.x * blockDim.x + threadIdx.x; // x-coordinate of the pixel
-    int j = blockIdx.y * blockDim.y + threadIdx.y; // y-coordinate of the pixel
-    int k = blockIdx.z * blockDim.z + threadIdx.z; // z-coordinate of the pixel
+    int i = blockIdx.x * blockDim.x + threadIdx.x;
+    int j = blockIdx.y * blockDim.y + threadIdx.y;
+    int k = blockIdx.z * blockDim.z + threadIdx.z;
 
     if (i < sizeRows && j < sizeCols && k < sizeDepth)
     {
@@ -132,48 +84,219 @@ __global__ void gaussianBlur(int *inputPixels, int *blurredPixels, int sizeRows,
     }
 }
 
-__global__ void rgbToGrayscale(int *blurredPixels, int *grayscaledPixels, int sizeRows, int sizeCols)
+__global__ void rgbToGrayscale(int *blurredPixels, int *grayscaledPixels, int sizeRows, int sizeCols, int sizeDepth)
 {
+    int i = blockIdx.x * blockDim.x + threadIdx.x;
+    int j = blockIdx.y * blockDim.y + threadIdx.y;
+
+    int sum = 0;
+    if (i < sizeRows && j < sizeCols)
+    {
+        for (int k = 0; k < sizeDepth; k++)
+        {
+            sum = sum + blurredPixels[i * sizeCols * sizeDepth + j * sizeDepth + k];
+        }
+        grayscaledPixels[i * sizeCols + j] = (int)(sum / sizeDepth);
+    }
+}
+
+__global__ void cannyFilter(int *cannyPixels, int *grayscaledPixels, int sizeRows, int sizeCols, double *G, int *theta)
+{
+    int i = blockIdx.x * blockDim.x + threadIdx.x;
+    int j = blockIdx.y * blockDim.y + threadIdx.y;
+
+    int gx[3][3] = {{-1, 0, 1}, {-2, 0, 2}, {-1, 0, 1}};
+    int gy[3][3] = {{-1, -2, -1}, {0, 0, 0}, {1, 2, 1}};
+    double lowerThreshold = 0.03;
+    double higherThreshold = 0.1;
+
+    // perform canny edge detection on everything but the edges
+
+    // find gx and gy for each pixel
+    double gxValue = 0;
+    double gyValue = 0;
+    for (int x = -1; x <= 1; x++)
+    {
+        for (int y = -1; y <= 1; y++)
+        {
+            gxValue = gxValue + (gx[1 - x][1 - y] * (double)(grayscaledPixels[(i + x) * sizeCols + j + y]));
+            gyValue = gyValue + (gy[1 - x][1 - y] * (double)(grayscaledPixels[(i + x) * sizeCols + j + y]));
+        }
+    }
+
+    // calculate G and theta
+    G[i * sizeCols + j] = std::sqrt(std::pow(gxValue, 2) + std::pow(gyValue, 2));
+    double atanResult = atan2(gyValue, gxValue) * 180.0 / 3.14159265;
+    theta[i * sizeCols + j] = (int)(180.0 + atanResult);
+
+    // setting the edges
+    if (i == 1)
+    {
+        G[i * sizeCols + j - 1] = G[i * sizeCols + j];
+        theta[i * sizeCols + j - 1] = theta[i * sizeCols + j];
+    }
+    else if (j == 1)
+    {
+        G[(i - 1) * sizeCols + j] = G[i * sizeCols + j];
+        theta[(i - 1) * sizeCols + j] = theta[i * sizeCols + j];
+    }
+    else if (i == sizeRows - 1)
+    {
+        G[i * sizeCols + j + 1] = G[i * sizeCols + j];
+        theta[i * sizeCols + j + 1] = theta[i * sizeCols + j];
+    }
+    else if (j == sizeCols - 1)
+    {
+        G[(i + 1) * sizeCols + j] = G[i * sizeCols + j];
+        theta[(i + 1) * sizeCols + j] = theta[i * sizeCols + j];
+    }
+
+    // setting the corners
+    if (i == 1 && j == 1)
+    {
+        G[(i - 1) * sizeCols + j - 1] = G[i * sizeCols + j];
+        theta[(i - 1) * sizeCols + j - 1] = theta[i * sizeCols + j];
+    }
+    else if (i == 1 && j == sizeCols - 1)
+    {
+        G[(i - 1) * sizeCols + j + 1] = G[i * sizeCols + j];
+        theta[(i - 1) * sizeCols + j + 1] = theta[i * sizeCols + j];
+    }
+    else if (i == sizeRows - 1 && j == 1)
+    {
+        G[(i + 1) * sizeCols + j - 1] = G[i * sizeCols + j];
+        theta[(i + 1) * sizeCols + j - 1] = theta[i * sizeCols + j];
+    }
+    else if (i == sizeRows - 1 && j == sizeCols - 1)
+    {
+        G[(i + 1) * sizeCols + j + 1] = G[i * sizeCols + j];
+        theta[(i + 1) * sizeCols + j + 1] = theta[i * sizeCols + j];
+    }
+
+    // round to the nearest 45 degrees
+    theta[i * sizeCols + j] = theta[i * sizeCols + j] / 45 * 45;
+
+    // non-maximum suppression
+
+    if (theta[i * sizeCols + j] == 0 || theta[i * sizeCols + j] == 180)
+    {
+        if (G[i * sizeCols + j] < G[i * sizeCols + j - 1] || G[i * sizeCols + j] < G[i * sizeCols + j + 1])
+        {
+            G[i * sizeCols + j] = 0;
+        }
+    }
+    else if (theta[i * sizeCols + j] == 45 || theta[i * sizeCols + j] == 225)
+    {
+        if (G[i * sizeCols + j] < G[(i + 1) * sizeCols + j + 1] || G[i * sizeCols + j] < G[(i - 1) * sizeCols + j - 1])
+        {
+            G[i * sizeCols + j] = 0;
+        }
+    }
+    else if (theta[i * sizeCols + j] == 90 || theta[i * sizeCols + j] == 270)
+    {
+        if (G[i * sizeCols + j] < G[(i + 1) * sizeCols + j] || G[i * sizeCols + j] < G[(i - 1) * sizeCols + j])
+        {
+            G[i * sizeCols + j] = 0;
+        }
+    }
+    else
+    {
+        if (G[i * sizeCols + j] < G[(i + 1) * sizeCols + j - 1] || G[i * sizeCols + j] < G[(i - 1) * sizeCols + j + 1])
+        {
+            G[i * sizeCols + j] = 0;
+        }
+    }
+
+    cannyPixels[i * sizeCols + j] = (int)(G[i * sizeCols + j] * (255.0 / 511.517));
+
+    // double threshold
+    bool changes;
+    do
+    {
+        changes = false;
+
+        if (G[i * sizeCols + j] < (lowerThreshold * 511.517))
+        {
+            G[i * sizeCols + j] = 0;
+        }
+        else if (G[i * sizeCols + j] >= (higherThreshold * 511.517))
+        {
+            continue;
+        }
+        else if (G[i * sizeCols + j] < (higherThreshold * 511.517))
+        {
+            int tempG = G[i * sizeCols + j];
+            G[i * sizeCols + j] = 0;
+            for (int x = -1; x <= 1; x++)
+            {
+                bool breakNestedLoop = false;
+                for (int y = -1; y <= 1; y++)
+                {
+                    if (x == 0 && y == 0)
+                    {
+                        continue;
+                    }
+                    if (G[(i + x) * sizeCols + (j + y)] >= (higherThreshold * 511.517))
+                    {
+                        G[i * sizeCols + j] = (higherThreshold * 511.517);
+                        changes = true;
+                        breakNestedLoop = true;
+                        break;
+                    }
+                }
+                if (breakNestedLoop)
+                {
+                    break;
+                }
+            }
+        }
+        cannyPixels[i * sizeCols + j] = (int)(G[i * sizeCols + j] * (255.0 / 511.517));
+
+    } while (changes);
 }
 
 void cannyEdgeDetection(uint8_t *inputImage, double lowerThreshold, double higherThreshold, int width, int height, int channels)
 {
     int *pixels = imgToArray(inputImage, height, width, channels);
+    int *pixelsPtr;
 
-    // cudaMalloc((void **)&pixelsPtr, height * width * channels * sizeof(int));
+    cudaMalloc((void **)&pixelsPtr, height * width * channels * sizeof(int));
 
-    // cudaMemcpy(pixelsPtr, pixels, height * width * channels * sizeof(int), cudaMemcpyHostToDevice);
+    cudaMemcpy(pixelsPtr, pixels, height * width * channels * sizeof(int), cudaMemcpyHostToDevice);
 
-    // dim3 blockSize(16, 16);
-    // dim3 numBlocks((width + blockSize.x - 1) / blockSize.x,
-    //                (height + blockSize.y - 1) / blockSize.y,
-    //                (channels + blockSize.z - 1) / blockSize.z);
+    dim3 blockSize(16, 16);
+    dim3 numBlocks((width + blockSize.x - 1) / blockSize.x,
+                   (height + blockSize.y - 1) / blockSize.y,
+                   (channels + blockSize.z - 1) / blockSize.z);
 
-    // // GAUSSIAN_BLUR:
+    // GAUSSIAN_BLUR:
 
-    // gaussianBlur<<<numBlocks, blockSize>>>(pixelsPtr, pixelsPtr, height, width, channels);
+    gaussianBlur<<<numBlocks, blockSize>>>(pixelsPtr, pixelsPtr, height, width, channels);
+    std::cout << "Exited gaussian" << std::endl;
 
-    // // rgbToGrayscale<<<numBlocks, threadsPerBlock>>>(pixelsPtr, pixelsPtr, height, width);
+    rgbToGrayscale<<<numBlocks, blockSize>>>(pixelsPtr, pixelsPtr, height, width, channels);
+    std::cout << "Exited grayscale" << std::endl;
 
-    // cudaMemcpy(pixels, pixelsPtr, height * width * channels * sizeof(int), cudaMemcpyDeviceToHost);
+    double *gradientPtr;
+    int *thetaPtr;
 
-    // std::vector<int>
-    //     pixelsBlur = gaussianBlur(pixels, kernel, kernelConst, height, width, channels);
+    cudaMalloc((void **)&gradientPtr, height * width * sizeof(double));
+    cudaMalloc((void **)&thetaPtr, height * width * sizeof(int));
 
-    // // GRAYSCALE:
+    cannyFilter<<<numBlocks, blockSize>>>(pixelsPtr, pixelsPtr, height, width, gradientPtr, thetaPtr);
+    std::cout << "Exited cannyFilter" << std::endl;
 
-    // std::vector<int> pixelsGray = rgbToGrayscale(pixelsBlur, height, width, channels);
-
-    // // CANNY_FILTER:
-
-    // std::vector<int> pixelsCanny = cannyFilter(pixelsGray, height, width, 1, lowerThreshold, higherThreshold);
+    cudaMemcpy(pixels, pixelsPtr, height * width * channels * sizeof(int), cudaMemcpyDeviceToHost);
 
     uint8_t *outputImage = (unsigned char *)malloc(width * height);
-    arrayToImg(pixelsCanny, outputImage, height, width, 1);
+    arrayToImg(pixels, outputImage, height, width, 1);
 
     stbi_write_jpg(outputImagePath, width, height, 1, outputImage, 100);
 
     free(outputImage);
+    cudaFree(pixelsPtr);
+    cudaFree(gradientPtr);
+    cudaFree(thetaPtr);
 }
 
 int main()
