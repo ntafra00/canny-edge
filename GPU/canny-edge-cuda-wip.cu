@@ -15,7 +15,7 @@
 using namespace std;
 
 const char *inputImagePath = "../input.jpg";
-const char *outputImagePath = "output-cpu.jpg";
+const char *outputImagePath = "output-gpu.jpg";
 
 int *imgToArray(uint8_t *pixelPtr, int sizeRows, int sizeCols, int sizeDepth)
 {
@@ -26,6 +26,7 @@ int *imgToArray(uint8_t *pixelPtr, int sizeRows, int sizeCols, int sizeDepth)
         {
             for (int k = 0; k < sizeDepth; k++)
             {
+                // converting BGR to RGB colors
                 pixels[i * sizeCols * sizeDepth + j * sizeDepth + k] =
                     (int)pixelPtr[i * sizeCols * sizeDepth + j * sizeDepth + 2 - k];
             }
@@ -34,7 +35,7 @@ int *imgToArray(uint8_t *pixelPtr, int sizeRows, int sizeCols, int sizeDepth)
     return pixels;
 }
 
-void arrayToImg(std::vector<int> &pixels, uint8_t *pixelPtr, int sizeRows, int sizeCols, int sizeDepth)
+void arrayToImg(int *pixels, uint8_t *pixelPtr, int sizeRows, int sizeCols, int sizeDepth)
 {
     for (int i = 0; i < sizeRows; i++)
     {
@@ -98,7 +99,7 @@ std::vector<int> rgbToGrayscale(std::vector<int> &pixels, int sizeRows, int size
     return pixelsGray;
 }
 
-__global__ void gaussianBlur(int *inputPixels, int *blurredPixels, int height, int width, int channels)
+__global__ void gaussianBlur(int *inputPixels, int *blurredPixels, int sizeRows, int sizeCols, int sizeDepth)
 {
     double kernel[5][5] = {{2.0, 4.0, 5.0, 4.0, 2.0},
                            {4.0, 9.0, 12.0, 9.0, 4.0},
@@ -107,30 +108,54 @@ __global__ void gaussianBlur(int *inputPixels, int *blurredPixels, int height, i
                            {2.0, 4.0, 5.0, 4.0, 2.0}};
     double kernelConst = (1.0 / 159.0);
 
-    int x = threadIdx.x * blockIdx.x 
+    int i = blockIdx.x * blockDim.x + threadIdx.x; // x-coordinate of the pixel
+    int j = blockIdx.y * blockDim.y + threadIdx.y; // y-coordinate of the pixel
+    int k = blockIdx.z * blockDim.z + threadIdx.z; // z-coordinate of the pixel
+
+    if (i < sizeRows && j < sizeCols && k < sizeDepth)
+    {
+        double sum = 0;
+        double sumKernel = 0;
+        for (int y = -2; y <= 2; y++)
+        {
+            for (int x = -2; x <= 2; x++)
+            {
+                if ((i + x) >= 0 && (i + x) < sizeRows && (j + y) >= 0 && (j + y) < sizeCols)
+                {
+                    double channel = (double)inputPixels[(i + x) * sizeCols * sizeDepth + (j + y) * sizeDepth + k];
+                    sum += channel * kernelConst * kernel[x + 2][y + 2];
+                    sumKernel += kernelConst * kernel[x + 2][y + 2];
+                }
+            }
+        }
+        blurredPixels[i * sizeCols * sizeDepth + j * sizeDepth + k] = (int)(sum / sumKernel);
+    }
 }
 
-__global__ void rgbToGrayscale()
+__global__ void rgbToGrayscale(int *blurredPixels, int *grayscaledPixels, int sizeRows, int sizeCols)
 {
 }
 
 void cannyEdgeDetection(uint8_t *inputImage, double lowerThreshold, double higherThreshold, int width, int height, int channels)
 {
     int *pixels = imgToArray(inputImage, height, width, channels);
-    int *pixelsPtr;
 
-    cudaMalloc((void **)&pixelsPtr, height * width * channels * sizeof(int));
+    // cudaMalloc((void **)&pixelsPtr, height * width * channels * sizeof(int));
 
-    cudaMemcpy(pixelsPtr, pixels, height * width * channels * sizeof(int), cudaMemcpyHostToDevice);
+    // cudaMemcpy(pixelsPtr, pixels, height * width * channels * sizeof(int), cudaMemcpyHostToDevice);
 
-    // 6,220,800
-    dim3 threadsPerBlock(16, 16, 1);
-    // 120 68 3
-    dim3 numBlocks((height + threadsPerBlock.x - 1) / threadsPerBlock.x, (width + threadsPerBlock.y - 1) / threadsPerBlock.y, (channels + threadsPerBlock.z - 1) / threadsPerBlock.z);
+    // dim3 blockSize(16, 16);
+    // dim3 numBlocks((width + blockSize.x - 1) / blockSize.x,
+    //                (height + blockSize.y - 1) / blockSize.y,
+    //                (channels + blockSize.z - 1) / blockSize.z);
 
-    // GAUSSIAN_BLUR:
+    // // GAUSSIAN_BLUR:
 
-    gaussianBlur<<<numBlocks, threadsPerBlock>>>(pixelsPtr, pixelsPtr, height, width, channels);
+    // gaussianBlur<<<numBlocks, blockSize>>>(pixelsPtr, pixelsPtr, height, width, channels);
+
+    // // rgbToGrayscale<<<numBlocks, threadsPerBlock>>>(pixelsPtr, pixelsPtr, height, width);
+
+    // cudaMemcpy(pixels, pixelsPtr, height * width * channels * sizeof(int), cudaMemcpyDeviceToHost);
 
     // std::vector<int>
     //     pixelsBlur = gaussianBlur(pixels, kernel, kernelConst, height, width, channels);
@@ -143,10 +168,12 @@ void cannyEdgeDetection(uint8_t *inputImage, double lowerThreshold, double highe
 
     // std::vector<int> pixelsCanny = cannyFilter(pixelsGray, height, width, 1, lowerThreshold, higherThreshold);
 
-    // uint8_t *outputImage = (unsigned char *)malloc(width * height);
-    // arrayToImg(pixelsCanny, outputImage, height, width, 1);
+    uint8_t *outputImage = (unsigned char *)malloc(width * height);
+    arrayToImg(pixelsCanny, outputImage, height, width, 1);
 
-    // stbi_write_jpg(outputImagePath, width, height, 1, outputImage, 100);
+    stbi_write_jpg(outputImagePath, width, height, 1, outputImage, 100);
+
+    free(outputImage);
 }
 
 int main()
