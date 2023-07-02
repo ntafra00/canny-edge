@@ -17,7 +17,7 @@ using namespace std;
 using namespace std::chrono;
 
 const char *inputImagePath = "../input.jpg";
-const char *outputImagePath = "output-gpu.jpg";
+const char *outputImagePath = "output-gpu-shared.jpg";
 
 int *imgToArray(uint8_t *pixelPtr, int sizeRows, int sizeCols, int sizeDepth)
 {
@@ -61,8 +61,21 @@ __global__ void gaussianBlur(int *inputPixels, int *blurredPixels, int sizeRows,
                            {2.0, 4.0, 5.0, 4.0, 2.0}};
     double kernelConst = (1.0 / 159.0);
 
+    __shared__ int sharedPixels[18 * 18 * 3];
+
     int i = blockIdx.y * blockDim.y + threadIdx.y;
     int j = blockIdx.x * blockDim.x + threadIdx.x;
+
+    int threadId = threadIdx.y * blockDim.x + threadIdx.x;
+
+    for (int k = 0; k < sizeDepth; k++)
+    {
+        if (i < sizeRows && j < sizeCols && threadIdx.y < 18 && threadIdx.x < 18)
+        {
+            sharedPixels[(threadId + k * blockDim.y * blockDim.x)] = inputPixels[i * sizeCols * sizeDepth + j * sizeDepth + k];
+        }
+    }
+    __syncthreads();
 
     if (i < sizeRows && j < sizeCols)
     {
@@ -76,7 +89,7 @@ __global__ void gaussianBlur(int *inputPixels, int *blurredPixels, int sizeRows,
                 {
                     if ((i + x) >= 0 && (i + x) < sizeRows && (j + y) >= 0 && (j + y) < sizeCols)
                     {
-                        double channel = (double)inputPixels[(i + x) * sizeCols * sizeDepth + (j + y) * sizeDepth + k];
+                        double channel = (double)sharedPixels[threadId + k * blockDim.y * blockDim.x];
                         sum += channel * kernelConst * kernel[x + 2][y + 2];
                         sumKernel += kernelConst * kernel[x + 2][y + 2];
                     }
@@ -89,17 +102,30 @@ __global__ void gaussianBlur(int *inputPixels, int *blurredPixels, int sizeRows,
 
 __global__ void rgbToGrayscale(int *blurredPixels, int *grayscaledPixels, int sizeRows, int sizeCols, int sizeDepth)
 {
+    __shared__ int sharedPixels[18 * 18 * 3];
+
     int i = blockIdx.y * blockDim.y + threadIdx.y;
     int j = blockIdx.x * blockDim.x + threadIdx.x;
 
-    int sum = 0;
+    int threadId = threadIdx.y * blockDim.x + threadIdx.x;
+
+    for (int k = 0; k < sizeDepth; k++)
+    {
+        if (i < sizeRows && j < sizeCols && threadIdx.y < 18 && threadIdx.x < 18)
+        {
+            sharedPixels[(threadId + k * blockDim.y * blockDim.x)] = blurredPixels[i * sizeCols * sizeDepth + j * sizeDepth + k];
+        }
+    }
+    __syncthreads();
+
     if (i < sizeRows && j < sizeCols)
     {
+        int sum = 0;
         for (int k = 0; k < sizeDepth; k++)
         {
-            sum += blurredPixels[(i * sizeCols + j) * sizeDepth + k];
+            sum += sharedPixels[threadId + k * blockDim.y * blockDim.x];
         }
-        grayscaledPixels[i * sizeCols + j] = (int)(sum / sizeDepth);
+        grayscaledPixels[i * sizeCols + j] = (int)sum / 3;
     }
 }
 
@@ -108,38 +134,52 @@ __global__ void nonMaxSuppresion(int *theta, double *G, int sizeRows, int sizeCo
     int i = blockIdx.y * blockDim.y + threadIdx.y;
     int j = blockIdx.x * blockDim.x + threadIdx.x;
 
+    __shared__ int sharedTheta[18 * 18];
+    __shared__ int sharedG[18 * 18];
+
+    int threadId = threadIdx.y * blockDim.x + threadIdx.x;
+
+    if (i < sizeRows && j < sizeCols && threadIdx.y < 18 && threadIdx.x < 18)
+    {
+        sharedTheta[threadId] = theta[i * sizeCols + j];
+        sharedG[threadId] = G[i * sizeCols + j];
+    }
+    __syncthreads();
+
     if (i > 0 && i < sizeRows - 1 && j > 0 && j < sizeCols - 1)
     {
-        if (theta[i * sizeCols + j] == 0 || theta[i * sizeCols + j] == 180)
+        if (sharedTheta[threadId] == 0 || sharedTheta[threadId] == 180)
         {
-            if (G[i * sizeCols + j] < G[i * sizeCols + j - 1] || G[i * sizeCols + j] < G[i * sizeCols + j + 1])
+            if (sharedG[threadId] < sharedG[threadId - 1] || sharedG[threadId] < sharedG[threadId + 1])
             {
-                G[i * sizeCols + j] = 0;
+                sharedG[threadId] = 0;
             }
         }
-        else if (theta[i * sizeCols + j] == 45 || theta[i * sizeCols + j] == 225)
+        else if (sharedTheta[threadId] == 45 || sharedTheta[threadId] == 225)
         {
-            if (G[i * sizeCols + j] < G[(i + 1) * sizeCols + j + 1] || G[i * sizeCols + j] < G[(i - 1) * sizeCols + j - 1])
+            if (sharedG[threadId] < G[(i + 1) * sizeCols + j + 1] || sharedG[threadId] < G[(i - 1) * sizeCols + j - 1])
             {
-                G[i * sizeCols + j] = 0;
+                sharedG[threadId] = 0;
             }
         }
-        else if (theta[i * sizeCols + j] == 90 || theta[i * sizeCols + j] == 270)
+        else if (sharedTheta[threadId] == 90 || sharedTheta[threadId] == 270)
         {
-            if (G[i * sizeCols + j] < G[(i + 1) * sizeCols + j] || G[i * sizeCols + j] < G[(i - 1) * sizeCols + j])
+            if (sharedG[threadId] < G[(i + 1) * sizeCols + j] || sharedG[threadId] < G[(i - 1) * sizeCols + j])
             {
-                G[i * sizeCols + j] = 0;
+                sharedG[threadId] = 0;
             }
         }
         else
         {
-            if (G[i * sizeCols + j] < G[(i + 1) * sizeCols + j - 1] || G[i * sizeCols + j] < G[(i - 1) * sizeCols + j + 1])
+            if (sharedG[threadId] < G[(i + 1) * sizeCols + j - 1] || sharedG[threadId] < G[(i - 1) * sizeCols + j + 1])
             {
-                G[i * sizeCols + j] = 0;
+                sharedG[threadId] = 0;
             }
         }
 
-        pixelsCanny[i * sizeCols + j] = (int)(G[i * sizeCols + j] * (255.0 / 511.517));
+        pixelsCanny[threadId] = (int)(sharedG[threadId] * (255.0 / largestG));
+        G[i * sizeCols + j] = sharedG[threadId];
+        theta[i * sizeCols + j] = sharedTheta[threadId];
     }
 }
 
@@ -155,15 +195,15 @@ void doubleThreshold(int sizeRows, int sizeCols, double *G, double largestG, int
         {
             for (int j = 1; j < sizeCols - 1; j++)
             {
-                if (G[i * sizeCols + j] < (lowerThreshold * 511.517))
+                if (G[i * sizeCols + j] < (lowerThreshold * largestG))
                 {
                     G[i * sizeCols + j] = 0;
                 }
-                else if (G[i * sizeCols + j] >= (higherThreshold * 511.517))
+                else if (G[i * sizeCols + j] >= (higherThreshold * largestG))
                 {
                     continue;
                 }
-                else if (G[i * sizeCols + j] < (higherThreshold * 511.517))
+                else if (G[i * sizeCols + j] < (higherThreshold * largestG))
                 {
                     int tempG = G[i * sizeCols + j];
                     G[i * sizeCols + j] = 0;
@@ -176,9 +216,9 @@ void doubleThreshold(int sizeRows, int sizeCols, double *G, double largestG, int
                             {
                                 continue;
                             }
-                            if (G[(i + x) * sizeCols + (j + y)] >= (higherThreshold * 511.517))
+                            if (G[(i + x) * sizeCols + (j + y)] >= (higherThreshold * largestG))
                             {
-                                G[i * sizeCols + j] = (higherThreshold * 511.517);
+                                G[i * sizeCols + j] = (higherThreshold * largestG);
                                 changes = true;
                                 breakNestedLoop = true;
                                 break;
@@ -190,7 +230,7 @@ void doubleThreshold(int sizeRows, int sizeCols, double *G, double largestG, int
                         }
                     }
                 }
-                pixelsCanny[i * sizeCols + j] = (int)(G[i * sizeCols + j] * (255.0 / 511.517));
+                pixelsCanny[i * sizeCols + j] = (int)(G[i * sizeCols + j] * (255.0 / largestG));
             }
         }
     } while (changes);

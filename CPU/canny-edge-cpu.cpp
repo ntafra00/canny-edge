@@ -186,6 +186,11 @@ void performNonMaximumSuppresion(double *G, std::vector<int> &theta, int sizeCol
             gradient value of current pixel will be set to higher threshold value multiplied by largest gradient and whole function
             will be performed again with new values
 
+    Adjusting threshold values:
+        * Higher high threshold: Results in fewer but stronger edges, making the detection more specific. It can help reduce noise and spurious edges.
+        * Lower high threshold: Results in more edges being detected, making the detection more sensitive but may include more noise and weaker edges.
+        * Higher low threshold: Reduces the number of weak edges that are considered for promotion to strong edges, making the detection more specific.
+        * Lower low threshold: Increases the number of weak edges that are considered for promotion to strong edges, making the detection more sensitive but may also introduce more noise and weaker edges.
 */
 
 void performDoubleThresholding(double *G, std::vector<int> &theta, int sizeCols, int sizeRows, std::vector<int> &pixels, double largestG)
@@ -382,7 +387,7 @@ int main()
 
     if (channels != 3)
     {
-        printf("Images is not in RGB format\n");
+        printf("Image is not in RGB format\n");
         return -1;
     }
 
