@@ -15,6 +15,11 @@ using namespace std;
 const char *inputImagePath = "../input.jpg";
 const char *outputImagePath = "output-cpu.jpg";
 
+/*
+    Function that takes loaded image as array of type uint8_t and converts it to array of integers
+    Since uint8_t has BGR format, 2 - k part is needed to convert it to RGB
+*/
+
 int *imgToArray(uint8_t *pixelPtr, int sizeRows, int sizeCols, int sizeDepth)
 {
     int *pixels = (int *)malloc((sizeRows * sizeCols * sizeDepth) * sizeof(int));
@@ -33,6 +38,10 @@ int *imgToArray(uint8_t *pixelPtr, int sizeRows, int sizeCols, int sizeDepth)
     return pixels;
 }
 
+/*
+    Function that takes output images as array of integers and converts it to array of uint8_t
+*/
+
 void arrayToImg(std::vector<int> &pixels, uint8_t *pixelPtr, int sizeRows, int sizeCols, int sizeDepth)
 {
     for (int i = 0; i < sizeRows; i++)
@@ -48,6 +57,10 @@ void arrayToImg(std::vector<int> &pixels, uint8_t *pixelPtr, int sizeRows, int s
     }
     return;
 }
+
+/*
+    Function that takes input image pixels and performs Gaussian blur on every single pixel
+*/
 
 std::vector<int> gaussianBlur(int *pixels, std::vector<std::vector<double>> &kernel, double kernelConst, int sizeRows, int sizeCols, int sizeDepth)
 {
@@ -79,6 +92,12 @@ std::vector<int> gaussianBlur(int *pixels, std::vector<std::vector<double>> &ker
     return pixelsBlur;
 }
 
+/*
+    Function that converts given blurred image to grayscale
+    Size of blurred image is reduced by 3 since every pixel is not present with one entry in the array
+    Grayscale value is found by summing up RGB values and dividing it by 3
+*/
+
 std::vector<int> rgbToGrayscale(std::vector<int> &pixels, int sizeRows, int sizeCols, int sizeDepth)
 {
     std::vector<int> pixelsGray(sizeRows * sizeCols);
@@ -96,6 +115,56 @@ std::vector<int> rgbToGrayscale(std::vector<int> &pixels, int sizeRows, int size
     }
     return pixelsGray;
 }
+
+/*
+    Function that performs non maximum suppresion on each pixel
+    Actions are performed based on current pixel gradient direction
+
+    Example:
+
+    If current pixel has gradient direction 0 or 180 degrees, we have to check pixel that's bellow and above it
+    If any of these pixels have greater gradient value than current one, current one's gradient value will be set to 0
+*/
+
+void performNonMaximumSuppresion(double *G, std::vector<int> &theta, int sizeCols, int sizeRows, std::vector<int> &pixels, double largestG)
+{
+    for (int i = 1; i < sizeRows - 1; i++)
+    {
+        for (int j = 1; j < sizeCols - 1; j++)
+        {
+            if (theta[i * sizeCols + j] == 0 || theta[i * sizeCols + j] == 180)
+            {
+                if (G[i * sizeCols + j] < G[i * sizeCols + j - 1] || G[i * sizeCols + j] < G[i * sizeCols + j + 1])
+                {
+                    G[i * sizeCols + j] = 0;
+                }
+            }
+            else if (theta[i * sizeCols + j] == 45 || theta[i * sizeCols + j] == 225)
+            {
+                if (G[i * sizeCols + j] < G[(i + 1) * sizeCols + j + 1] || G[i * sizeCols + j] < G[(i - 1) * sizeCols + j - 1])
+                {
+                    G[i * sizeCols + j] = 0;
+                }
+            }
+            else if (theta[i * sizeCols + j] == 90 || theta[i * sizeCols + j] == 270)
+            {
+                if (G[i * sizeCols + j] < G[(i + 1) * sizeCols + j] || G[i * sizeCols + j] < G[(i - 1) * sizeCols + j])
+                {
+                    G[i * sizeCols + j] = 0;
+                }
+            }
+            else
+            {
+                if (G[i * sizeCols + j] < G[(i + 1) * sizeCols + j - 1] || G[i * sizeCols + j] < G[(i - 1) * sizeCols + j + 1])
+                {
+                    G[i * sizeCols + j] = 0;
+                }
+            }
+
+            pixels[i * sizeCols + j] = (int)(G[i * sizeCols + j] * (255.0 / largestG));
+        }
+    }
+};
 
 std::vector<int> cannyFilter(std::vector<int> &pixels, int sizeRows, int sizeCols, int sizeDepth, double lowerThreshold, double higherThreshold)
 {
@@ -182,43 +251,7 @@ std::vector<int> cannyFilter(std::vector<int> &pixels, int sizeRows, int sizeCol
         }
     }
 
-    // non-maximum suppression
-    for (int i = 1; i < sizeRows - 1; i++)
-    {
-        for (int j = 1; j < sizeCols - 1; j++)
-        {
-            if (theta[i * sizeCols + j] == 0 || theta[i * sizeCols + j] == 180)
-            {
-                if (G[i * sizeCols + j] < G[i * sizeCols + j - 1] || G[i * sizeCols + j] < G[i * sizeCols + j + 1])
-                {
-                    G[i * sizeCols + j] = 0;
-                }
-            }
-            else if (theta[i * sizeCols + j] == 45 || theta[i * sizeCols + j] == 225)
-            {
-                if (G[i * sizeCols + j] < G[(i + 1) * sizeCols + j + 1] || G[i * sizeCols + j] < G[(i - 1) * sizeCols + j - 1])
-                {
-                    G[i * sizeCols + j] = 0;
-                }
-            }
-            else if (theta[i * sizeCols + j] == 90 || theta[i * sizeCols + j] == 270)
-            {
-                if (G[i * sizeCols + j] < G[(i + 1) * sizeCols + j] || G[i * sizeCols + j] < G[(i - 1) * sizeCols + j])
-                {
-                    G[i * sizeCols + j] = 0;
-                }
-            }
-            else
-            {
-                if (G[i * sizeCols + j] < G[(i + 1) * sizeCols + j - 1] || G[i * sizeCols + j] < G[(i - 1) * sizeCols + j + 1])
-                {
-                    G[i * sizeCols + j] = 0;
-                }
-            }
-
-            pixelsCanny[i * sizeCols + j] = (int)(G[i * sizeCols + j] * (255.0 / largestG));
-        }
-    }
+    performNonMaximumSuppresion(G, theta, sizeCols, sizeRows, pixelsCanny, largestG);
 
     // double threshold
     bool changes;

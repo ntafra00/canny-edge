@@ -55,10 +55,10 @@ void arrayToImg(std::vector<int> &pixels, uint8_t *pixelPtr, int sizeRows, int s
     }
     return;
 }
+
 /*
     Function that takes input image pixels and performs Gaussian blur on every single pixel
 */
-
 std::vector<int> gaussianBlur(std::vector<int> &pixels, std::vector<std::vector<double>> &kernel, double kernelConst, int sizeRows, int sizeCols, int sizeDepth)
 {
     std::vector<int> pixelsBlur(sizeRows * sizeCols * sizeDepth);
