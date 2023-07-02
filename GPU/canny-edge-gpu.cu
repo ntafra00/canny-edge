@@ -139,7 +139,7 @@ __global__ void nonMaxSuppresion(int *theta, double *G, int sizeRows, int sizeCo
             }
         }
 
-        pixelsCanny[i * sizeCols + j] = (int)(G[i * sizeCols + j] * (255.0 / 511.517));
+        pixelsCanny[i * sizeCols + j] = (int)(G[i * sizeCols + j] * (255.0 / largestG));
     }
 }
 
@@ -155,15 +155,15 @@ void doubleThreshold(int sizeRows, int sizeCols, double *G, double largestG, int
         {
             for (int j = 1; j < sizeCols - 1; j++)
             {
-                if (G[i * sizeCols + j] < (lowerThreshold * 511.517))
+                if (G[i * sizeCols + j] < (lowerThreshold * largestG))
                 {
                     G[i * sizeCols + j] = 0;
                 }
-                else if (G[i * sizeCols + j] >= (higherThreshold * 511.517))
+                else if (G[i * sizeCols + j] >= (higherThreshold * largestG))
                 {
                     continue;
                 }
-                else if (G[i * sizeCols + j] < (higherThreshold * 511.517))
+                else if (G[i * sizeCols + j] < (higherThreshold * largestG))
                 {
                     int tempG = G[i * sizeCols + j];
                     G[i * sizeCols + j] = 0;
@@ -176,9 +176,9 @@ void doubleThreshold(int sizeRows, int sizeCols, double *G, double largestG, int
                             {
                                 continue;
                             }
-                            if (G[(i + x) * sizeCols + (j + y)] >= (higherThreshold * 511.517))
+                            if (G[(i + x) * sizeCols + (j + y)] >= (higherThreshold * largestG))
                             {
-                                G[i * sizeCols + j] = (higherThreshold * 511.517);
+                                G[i * sizeCols + j] = (higherThreshold * largestG);
                                 changes = true;
                                 breakNestedLoop = true;
                                 break;
@@ -190,7 +190,7 @@ void doubleThreshold(int sizeRows, int sizeCols, double *G, double largestG, int
                         }
                     }
                 }
-                pixelsCanny[i * sizeCols + j] = (int)(G[i * sizeCols + j] * (255.0 / 511.517));
+                pixelsCanny[i * sizeCols + j] = (int)(G[i * sizeCols + j] * (255.0 / largestG));
             }
         }
     } while (changes);
