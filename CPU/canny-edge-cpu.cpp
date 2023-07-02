@@ -3,6 +3,7 @@
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <chrono>
 
 #define STB_IMAGE_IMPLEMENTATION
 #include "stb_image.h"
@@ -11,12 +12,13 @@
 #include "stb_image_write.h"
 
 using namespace std;
+using namespace std::chrono;
 
 const char *inputImagePath = "../input.jpg";
 const char *outputImagePath = "output-cpu.jpg";
 
 /*
-    Function that takes loaded image as array of type uint8_t and converts it to array of integers
+    Function that takes loaded image as an array of type uint8_t and converts it to an array of integers
     Since uint8_t has BGR format, 2 - k part is needed to convert it to RGB
 */
 
@@ -39,7 +41,7 @@ int *imgToArray(uint8_t *pixelPtr, int sizeRows, int sizeCols, int sizeDepth)
 }
 
 /*
-    Function that takes output images as array of integers and converts it to array of uint8_t
+    Function that takes output image as an array of integers and converts it to an array of uint8_t
 */
 
 void arrayToImg(std::vector<int> &pixels, uint8_t *pixelPtr, int sizeRows, int sizeCols, int sizeDepth)
@@ -60,6 +62,7 @@ void arrayToImg(std::vector<int> &pixels, uint8_t *pixelPtr, int sizeRows, int s
 
 /*
     Function that takes input image pixels and performs Gaussian blur on every single pixel
+    Every pixel has a new value that's computed by convoluting Gaussian kernel to 5x5 matrix around that pixel
 */
 
 std::vector<int> gaussianBlur(int *pixels, std::vector<std::vector<double>> &kernel, double kernelConst, int sizeRows, int sizeCols, int sizeDepth)
@@ -94,8 +97,8 @@ std::vector<int> gaussianBlur(int *pixels, std::vector<std::vector<double>> &ker
 
 /*
     Function that converts given blurred image to grayscale
-    Size of blurred image is reduced by 3 since every pixel is not present with one entry in the array
-    Grayscale value is found by summing up RGB values and dividing it by 3
+    Size of blurred image is reduced by 3 since every pixel is now presented with only one entry in the array
+    Grayscale value for each pixel is found by summing up it's RGB values and dividing it by 3
 */
 
 std::vector<int> rgbToGrayscale(std::vector<int> &pixels, int sizeRows, int sizeCols, int sizeDepth)
@@ -166,7 +169,78 @@ void performNonMaximumSuppresion(double *G, std::vector<int> &theta, int sizeCol
     }
 };
 
-std::vector<int> cannyFilter(std::vector<int> &pixels, int sizeRows, int sizeCols, int sizeDepth, double lowerThreshold, double higherThreshold)
+/*
+    Function that peforms double thresholding based on provided parameters for lower and higher threshold
+    Double thresholding is performed on every pixel of the image as it follows:
+
+    If current pixel's gradient is lower than lower threshold value multiplied by largest gradient, set that pixel's
+    gradient to 0 since it's considered as `weak` edge -> supressing weaker edges
+
+    If current pixel's gradient is higher or equal than higher threshold value multiplied by largest gradient,
+    it's value remains untouched since that pixel is considered as `strong` edge -> preserving strong edges
+
+    If current pixel's gradient is greater than lower threshold value multiplied by largest gradient and lower than
+    higher threshold value multipled by largest gradient, we're checking neighbor pixels gradient values as it follows:
+
+        * If any of the neighboring pixels has gradient value greater than higher threshold value multiplied by largest gradient,
+            gradient value of current pixel will be set to higher threshold value multiplied by largest gradient and whole function
+            will be performed again with new values
+
+*/
+
+void performDoubleThresholding(double *G, std::vector<int> &theta, int sizeCols, int sizeRows, std::vector<int> &pixels, double largestG)
+{
+    double lowerThreshold = 0.03;
+    double higherThreshold = 0.1;
+    bool changes;
+    do
+    {
+        changes = false;
+        for (int i = 1; i < sizeRows - 1; i++)
+        {
+            for (int j = 1; j < sizeCols - 1; j++)
+            {
+                if (G[i * sizeCols + j] < (lowerThreshold * largestG))
+                {
+                    G[i * sizeCols + j] = 0;
+                }
+                else if (G[i * sizeCols + j] >= (higherThreshold * largestG))
+                {
+                    continue;
+                }
+                else if (G[i * sizeCols + j] < (higherThreshold * largestG))
+                {
+                    G[i * sizeCols + j] = 0;
+                    for (int x = -1; x <= 1; x++)
+                    {
+                        bool breakNestedLoop = false;
+                        for (int y = -1; y <= 1; y++)
+                        {
+                            if (x == 0 && y == 0)
+                            {
+                                continue;
+                            }
+                            if (G[(i + x) * sizeCols + (j + y)] >= (higherThreshold * largestG))
+                            {
+                                G[i * sizeCols + j] = (higherThreshold * largestG);
+                                changes = true;
+                                breakNestedLoop = true;
+                                break;
+                            }
+                        }
+                        if (breakNestedLoop)
+                        {
+                            break;
+                        }
+                    }
+                }
+                pixels[i * sizeCols + j] = (int)(G[i * sizeCols + j] * (255.0 / largestG));
+            }
+        }
+    } while (changes);
+}
+
+std::vector<int> cannyFilter(std::vector<int> &pixels, int sizeRows, int sizeCols, int sizeDepth)
 {
     std::vector<int> pixelsCanny(sizeRows * sizeCols);
     int gx[3][3] = {{-1, 0, 1}, {-2, 0, 2}, {-1, 0, 1}};
@@ -253,58 +327,12 @@ std::vector<int> cannyFilter(std::vector<int> &pixels, int sizeRows, int sizeCol
 
     performNonMaximumSuppresion(G, theta, sizeCols, sizeRows, pixelsCanny, largestG);
 
-    // double threshold
-    bool changes;
-    do
-    {
-        changes = false;
-        for (int i = 1; i < sizeRows - 1; i++)
-        {
-            for (int j = 1; j < sizeCols - 1; j++)
-            {
-                if (G[i * sizeCols + j] < (lowerThreshold * largestG))
-                {
-                    G[i * sizeCols + j] = 0;
-                }
-                else if (G[i * sizeCols + j] >= (higherThreshold * largestG))
-                {
-                    continue;
-                }
-                else if (G[i * sizeCols + j] < (higherThreshold * largestG))
-                {
-                    int tempG = G[i * sizeCols + j];
-                    G[i * sizeCols + j] = 0;
-                    for (int x = -1; x <= 1; x++)
-                    {
-                        bool breakNestedLoop = false;
-                        for (int y = -1; y <= 1; y++)
-                        {
-                            if (x == 0 && y == 0)
-                            {
-                                continue;
-                            }
-                            if (G[(i + x) * sizeCols + (j + y)] >= (higherThreshold * largestG))
-                            {
-                                G[i * sizeCols + j] = (higherThreshold * largestG);
-                                changes = true;
-                                breakNestedLoop = true;
-                                break;
-                            }
-                        }
-                        if (breakNestedLoop)
-                        {
-                            break;
-                        }
-                    }
-                }
-                pixelsCanny[i * sizeCols + j] = (int)(G[i * sizeCols + j] * (255.0 / largestG));
-            }
-        }
-    } while (changes);
+    performDoubleThresholding(G, theta, sizeCols, sizeRows, pixelsCanny, largestG);
+
     return pixelsCanny;
 };
 
-void cannyEdgeDetection(uint8_t *inputImage, double lowerThreshold, double higherThreshold, int width, int height, int channels)
+void cannyEdgeDetection(uint8_t *inputImage, int width, int height, int channels)
 {
     int *pixels = imgToArray(inputImage, height, width, channels);
 
@@ -324,7 +352,7 @@ void cannyEdgeDetection(uint8_t *inputImage, double lowerThreshold, double highe
 
     // CANNY_FILTER:
 
-    std::vector<int> pixelsCanny = cannyFilter(pixelsGray, height, width, 1, lowerThreshold, higherThreshold);
+    std::vector<int> pixelsCanny = cannyFilter(pixelsGray, height, width, 1);
 
     uint8_t *outputImage = (unsigned char *)malloc(width * height);
     arrayToImg(pixelsCanny, outputImage, height, width, 1);
@@ -358,10 +386,14 @@ int main()
         return -1;
     }
 
-    double lowerThreshold = 0.03;
-    double higherThreshold = 0.1;
+    auto start = high_resolution_clock::now();
 
-    cannyEdgeDetection(inputImage, lowerThreshold, higherThreshold, width, height, channels);
+    cannyEdgeDetection(inputImage, width, height, channels);
+
+    auto stop = high_resolution_clock::now();
+
+    auto duration = duration_cast<milliseconds>(stop - start);
+    std::cout << "Time of execution on CPU is: " << duration.count() << " ms" << std::endl;
 
     return 0;
 }
